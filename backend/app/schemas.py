@@ -1,7 +1,7 @@
 """接口出入参模型：列表分页、动作结果与各模块的明细结构。"""
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any, ConfigDict, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,15 @@ class EntryPayload(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
     remark: str | None = None
 
+
+class TemperatureActionPayload(BaseModel):
+    """温控动作同时兼容 values 包装和前端直接提交 action。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    action: str | None = None
+    values: dict[str, Any] = Field(default_factory=dict)
+    remark: str | None = None
 
 
 class OrderEntry(BaseModel):

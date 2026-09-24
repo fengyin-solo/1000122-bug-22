@@ -12,16 +12,31 @@
     </header>
 
     <div class="stat-row">
-      <article v-for="item in stats" :key="item.label" class="stat-card">
-        <span class="stat-label">{{ item.label }}</span>
-        <strong class="stat-value">{{ item.value }}</strong>
+      <article class="stat-card">
+        <span class="stat-label">今日采集测点</span>
+        <strong class="stat-value">{{ store.todayCount }}</strong>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">超限测点</span>
+        <strong class="stat-value">{{ store.excursionCount }}</strong>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">离线测点</span>
+        <strong class="stat-value">{{ store.offlineCount }}</strong>
       </article>
     </div>
 
     <form class="filter-bar" @submit.prevent="reload">
-      <label v-for="field in filterFields" :key="field" class="filter-item">
-        <span>{{ field }}</span>
-        <input v-model="filters[field]" :placeholder="`按${field}检索`" />
+      <label class="filter-item">
+        <span>记录编号</span>
+        <input v-model="keyword" placeholder="按记录编号检索" />
+      </label>
+      <label class="filter-item">
+        <span>状态</span>
+        <select v-model="status">
+          <option value="">全部状态</option>
+          <option v-for="item in statuses" :key="item" :value="item">{{ item }}</option>
+        </select>
       </label>
       <button class="btn" type="submit">查询</button>
       <button class="btn ghost" type="button" @click="resetFilters">重置条件</button>
@@ -31,13 +46,16 @@
       <thead>
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
+          <th>状态</th>
           <th>可执行动作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+        <tr v-for="row in store.items" :key="String(row.id)">
+          <td v-for="column in columns" :key="column">{{ formatCell(row, column) }}</td>
+          <td>{{ row.status }}</td>
           <td class="row-actions">
+            <RouterLink class="link" :to="`/temperature/${row.id}`">查看详情</RouterLink>
             <button
               v-for="action in actions"
               :key="action"
@@ -49,15 +67,15 @@
             </button>
           </td>
         </tr>
-        <tr v-if="!rows.length">
-          <td :colspan="columns.length + 1" class="empty-state">暂无温控监控数据，可先登记温控记录</td>
+        <tr v-if="!store.items.length">
+          <td :colspan="columns.length + 2" class="empty-state">暂无温控监控数据，可先登记温控记录</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条温控监控记录</span>
-      <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
+      <span>共 {{ store.total }} 条温控监控记录<span v-if="feedbackMessage">，{{ feedbackMessage }}</span></span>
+      <span v-if="store.errorMessage" class="error-text">{{ store.errorMessage }}，当前展示上一次成功结果</span>
     </footer>
   </section>
 </template>
@@ -65,24 +83,32 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { request } from '@/api/client'
-
-type Row = Record<string, string | number | null>
+import { useTemperatureStore, type TemperatureEntry } from '@/stores/temperature'
 
 const ENDPOINT = '/api/temperature'
 const columns = ["记录编号", "关联运单", "测点编号", "实时温度", "温度上限", "温度下限", "采集时间"]
 const actions = ["确认记录", "标记超限", "重新采集"]
 const statuses = ["正常", "偏高", "偏低", "已离线"]
-const stats = [{"label": "今日采集测点", "value": 0}, {"label": "超限测点", "value": 0}, {"label": "离线测点", "value": 0}]
 
-const rows = ref<Row[]>([])
-const total = ref(0)
-const errorMessage = ref('')
-const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+const store = useTemperatureStore()
+const keyword = ref('')
+const status = ref('')
+const feedbackMessage = ref('')
+
+function formatCell(row: TemperatureEntry, column: string) {
+  const value = row[column as keyof TemperatureEntry]
+  if (column === '实时温度' && typeof value === 'number') {
+    return `${value.toFixed(1)} ℃`
+  }
+  if ((column === '温度上限' || column === '温度下限') && typeof value === 'number') {
+    return `${value.toFixed(1)} ℃`
+  }
+  return value ?? '—'
+}
 
 function resetFilters() {
-  filters.value = {}
+  keyword.value = ''
+  status.value = ''
   void reload()
 }
 
@@ -91,39 +117,20 @@ function exportRows() {
 }
 
 function openCreate() {
-  errorMessage.value = '温控记录登记入口尚未接入审批流'
+  store.errorMessage = '温控记录登记入口尚未接入审批流'
 }
 
-async function runAction(action: string, row: Row) {
-  errorMessage.value = ''
+async function runAction(action: string, row: TemperatureEntry) {
   try {
-    const response = await request(`${ENDPOINT}/${row.id}/actions`, {
-      method: 'POST',
-      body: JSON.stringify({ action }),
-    })
-    if (!response.ok) {
-      throw new Error('温控监控动作未生效，请稍后重试')
-    }
-    await reload()
+    feedbackMessage.value = await store.runAction(row.id, action)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '温控监控操作失败'
+    store.errorMessage = error instanceof Error ? error.message : '温控监控操作失败'
   }
 }
 
 async function reload() {
-  errorMessage.value = ''
-  const query = new URLSearchParams(filters.value as Record<string, string>).toString()
-  try {
-    const response = await request(`${ENDPOINT}?${query}`)
-    if (!response.ok) {
-      throw new Error('温控记录列表读取失败')
-    }
-    const payload = await response.json()
-    rows.value = payload.items ?? []
-    total.value = payload.total ?? rows.value.length
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '温控监控列表读取失败'
-  }
+  feedbackMessage.value = ''
+  await store.fetchList({ keyword: keyword.value.trim(), status: status.value })
 }
 
 onMounted(reload)
