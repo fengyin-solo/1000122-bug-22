@@ -19,6 +19,7 @@ class ActionResult(BaseModel):
     ok: bool
     message: str
     entry: dict[str, Any] | None = None
+    preserved: bool = False
 
 
 class EntryPayload(BaseModel):

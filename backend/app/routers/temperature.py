@@ -12,7 +12,6 @@ router = APIRouter(prefix="/api/temperature", tags=["温控监控"])
 
 service = TemperatureService()
 
-LIST_FIELDS = ["记录编号", "关联运单", "测点编号", "实时温度", "温度上限", "温度下限", "采集时间"]
 STATUSES = ["正常", "偏高", "偏低", "已离线"]
 
 
@@ -28,6 +27,13 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出温控监控清单：与列表接口使用同一序列化口径。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "temperature", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -50,16 +56,11 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条温控记录执行确认记录、标记超限、重新采集；不允许的动作会被拦下并说明原因。"""
+    """对单条温控记录执行确认、超限判断或重新采集；失败时返回保留下来的最近快照。"""
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, ok, message = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
+    if not ok:
+        return ActionResult(ok=False, preserved=True, message=message, entry=entry)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出温控监控清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "temperature", "total": total, "items": items}
